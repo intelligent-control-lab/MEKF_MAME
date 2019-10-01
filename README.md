@@ -1,5 +1,5 @@
 # MEKF_MAME
-Modified Extended Kalman Filter with generalized exponential Moving Average and dynamic Multi-Epoch update strategy (MEKF_MAME)
+**M**odified **E**xtended **K**alman **F**ilter with generalized exponential **M**oving **A**verage and dynamic **M**ulti-**E**poch update strategy (MEKF_MAME)
 
 Pytorch implementation source coder for paper "Robust Nonlinear Adaptation Algorithms for Multi-TaskPrediction Networks".
 
