@@ -11,7 +11,7 @@ In order to effectively utilize the samples in online adaptation, this paper pro
 
 
 ### Requirements
-* Python 3.5
+* Python 3.6
 * pytorch >=1.1.0
 * `pip install -r requirements.txt`
 
@@ -24,5 +24,5 @@ python train.py
 ```
 python adapt.py
 ```
-
+You can online adapt the offline trained model with several optimizers, including SGD, Adam, MEKF<sub>λ</sub>, MEKF<sub>EMA-DME</sub>. 
 
