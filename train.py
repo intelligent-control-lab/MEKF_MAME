@@ -4,6 +4,7 @@ import os
 import warnings
 
 import torch
+import IPython
 from parameters import hyper_parameters
 from dataset.dataset import get_data_loader
 from models.model_factory import create_model
@@ -26,13 +27,25 @@ def evaluate(model, data_loader, criterion_traj, criterion_intend, params, epoch
 		dat = get_predictions(data_loader, model,  device)
 		traj_hist, traj_preds, traj_labels, intent_preds, intent_labels, pred_start_pos = dat
 
+		# TODO: replacing loss traj with MSE on de-normalized output
 		loss_traj = criterion_traj(traj_preds, traj_labels)
 		loss_traj = loss_traj.cpu().detach().numpy()
+
+		# loss_traj = criterion_traj(traj_preds*data_stats["data_std"] + data_stats["data_mean"], traj_labels*data_stats["data_std"] + data_stats["data_mean"])
+		# loss_traj = loss_traj.cpu().detach().numpy()
+
 		traj_preds = get_position(traj_preds, pred_start_pos, data_stats)
 		traj_labels = get_position(traj_labels, pred_start_pos, data_stats)
 		mse = (traj_preds - traj_labels).pow(2).sum().float() / (traj_preds.size(0) * traj_preds.size(1))
 		mse = mse.cpu().detach().numpy()
-		out_str += "trajectory_loss: %.4f, trajectory_mse: %.4f, " % (loss_traj, mse)
+		# IPython.embed()
+
+		# TODO: swapping what Abu calls mse and trajectory_loss
+		# temp = mse
+		# mse = loss_traj
+		# loss_traj = temp
+
+		out_str += "trajectory_loss: %.6f, trajectory_mse: %.6f, " % (loss_traj, mse)
 
 		loss_intent = criterion_intend(intent_preds, intent_labels)
 		loss_intent = loss_intent.cpu().detach().numpy()
@@ -47,7 +60,8 @@ def evaluate(model, data_loader, criterion_traj, criterion_intend, params, epoch
 
 	log_dir = params['log_dir']
 	if not os.path.exists(log_dir + '%s.tsv' % mark):
-		with open(log_dir + 'test.tsv', 'a') as f:
+		# with open(log_dir + 'test.tsv', 'a') as f: # TODO: bug or intentional?
+		with open(log_dir + '%s.tsv' % mark, 'a') as f:
 			f.write('epoch\ttraj_loss\tintent_loss\tmse\tacc\n')
 
 	with open(log_dir + '%s.tsv' % mark, 'a') as f:
@@ -77,6 +91,7 @@ def train_on_batch(data, model, optimizer, criterion_traj, criterion_intend, par
 		mse = (pred_traj - y_traj).pow(2).sum().float() / (pred_traj.size(0) * pred_traj.size(1))
 		mse = mse.cpu().detach().numpy()
 		loss_traj_val = loss_traj.cpu().detach().numpy()
+		# IPython.embed()
 		out_str += "trajectory_loss: %.4f, trajectory_mse: %.4f, " % (loss_traj_val, mse)
 
 		_, pred_intent_cls = pred_intent.max(1)
@@ -102,6 +117,7 @@ def train(params):
 	train_params = params.train_param()
 
 	train_loader, valid_loader, test_loader, train_params = get_data_loader(train_params, mode='train')
+	# IPython.embed()
 	params._save_overwrite_parameters(params_key='train_param', params_value=train_params)
 
 	train_params['data_mean'] = torch.tensor(train_params['data_stats']['speed_mean'], dtype=torch.float).unsqueeze(
@@ -123,6 +139,7 @@ def train(params):
 	print('begin to train')
 	for epoch in range(1, train_params['epochs'] + 1):
 		for i, data in enumerate(train_loader, 0):
+			# IPython.embed()
 			print_result = True if i % train_params['print_step'] == 0 else False
 			train_on_batch(data, model, optimizer, criterion_traj, criterion_intend, params=train_params,
 			               print_result=print_result, epoch=epoch, iter=i)
@@ -158,7 +175,9 @@ def train(params):
 
 
 def main():
-	params = hyper_parameters(dataset='vehicle_ngsim', model_type='rnn')
+	# TODO: modify params here
+	params = hyper_parameters(dataset='vehicle_ngsim', model_type='fc')
+	# params = hyper_parameters(dataset='vehicle_ngsim', model_type='rnn')
 	params._set_default_dataset_params()
 	params.print_params()
 	train(params)

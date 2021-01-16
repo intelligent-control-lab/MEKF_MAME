@@ -5,6 +5,7 @@ import joblib
 import numpy as np
 import torch
 from torch.utils.data.dataset import Dataset
+import IPython
 
 def data_time_split(data_list,params):
 	input_time_step = params['input_time_step']
@@ -84,7 +85,7 @@ def data_time_split(data_list,params):
 	y_feature = np.array(y_feature)
 	y_intent=np.array(y_intent)
 	x_traj_len = np.array(x_traj_len)
-	data_ids=np.array(data_ids)
+	data_ids=np.array(data_ids) # for each window, describes the rollout number that it came from
 	pred_start_pos = x_traj[:,-1]
 	data ={'x_traj':x_traj,'x_speed':x_speed,'x_feature':x_feature,
 	       'y_traj':y_traj,'y_speed':y_speed,'y_feature':y_feature,
@@ -108,12 +109,19 @@ class Trajectory_Data(Dataset):
 		self.mode = mode
 		print(mode,'data preprocessing')
 		cache_dir = params['log_dir']+mode+'.cache'
-		if os.path.exists(cache_dir):
+		# if os.path.exists(cache_dir):
+		if False:
 			print('loading data from cache',cache_dir)
 			self.data = joblib.load(cache_dir)
+
+			# print("Just loaded data from saved cache")
+			# IPython.embed()
 		else:
 			raw_data = joblib.load(params['data_path'])[mode]
-			self.data = data_time_split(raw_data,params)
+			self.data = data_time_split(raw_data,params) # This just does windowing
+
+			# print("Just loaded data to create anew")
+			# IPython.embed()
 
 			if mode=='train':
 				data_stats['traj_mean'] = np.mean(self.data['x_traj'],axis=(0,1))
@@ -150,6 +158,8 @@ class Trajectory_Data(Dataset):
 		print(mode + '_data size:', len(self.data['x_encoder']))
 		print('each category counts:')
 		print(Counter(self.data['y_intent']))
+		print("In dataset.py")
+		# IPython.embed()
 
 	def __getitem__(self, index):
 		x = self.data['x_encoder'][index]

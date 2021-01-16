@@ -72,7 +72,7 @@ class hyper_parameters(object):
 			output_time_step=self.output_time_step,
 			inp_feat = self.inp_feat,
 
-			traj_intent_loss_ratio=[1, 0.1],  # traj loss : intent loss
+			traj_intent_loss_ratio=[1, 0.0],  #TODO: originally [1, 0.1], traj loss : intent loss
 			lr=0.01,
 			lr_schedule='multistep',  # multistep
 			lr_decay_epochs=[7, 14],

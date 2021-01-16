@@ -6,6 +6,7 @@ import warnings
 import joblib
 import torch
 import numpy as np
+import IPython
 from dataset.dataset import get_data_loader
 from adaptation.lookahead import Lookahead
 from adaptation.mekf import MEKF_MA
@@ -107,8 +108,17 @@ def test(params, adaptor='none', adapt_step=1):
 		pred_result = adaptable_prediction(data_loader, model, train_params, device, adaptor, adapt_step)
 
 	traj_hist, traj_preds, traj_labels, intent_preds, intent_labels, pred_start_pos = pred_result
-	traj_preds = get_position(traj_preds, pred_start_pos, data_stats)
-	traj_labels = get_position(traj_labels, pred_start_pos, data_stats)
+
+
+	# IPython.embed()
+	# TODO: what happened to the multiple rollouts in the test set? only just 1
+	# Note: traj_preds is 1 rollout's worth, w/ shape (len_rollout, ydim, 2)
+	# true_mse = torch.nn.MSELoss()(traj_preds * data_stats["data_std"] + data_stats["data_mean"],
+	# 						   traj_labels * data_stats["data_std"] + data_stats["data_mean"])
+	# true_mse = true_mse.cpu().detach().numpy()
+
+	traj_preds = get_position(traj_preds, pred_start_pos, data_stats) # NOTE: converted these to position first!
+	traj_labels = get_position(traj_labels, pred_start_pos, data_stats) # NOTE!!
 	intent_preds_prob = intent_preds.detach().clone()
 	_, intent_preds = intent_preds.max(1)
 
@@ -121,9 +131,15 @@ def test(params, adaptor='none', adapt_step=1):
 
 	out_str = 'Evaluation Result: \n'
 
+	# out_str += "trajectory_mse: %.5f, \n" % (true_mse)
+
 	num, time_step = result['traj_labels'].shape[:2]
 	mse = np.power(result['traj_labels'] - result['traj_preds'], 2).sum() / (num * time_step)
 	out_str += "trajectory_mse: %.4f, \n" % (mse)
+	# TODO: calling this trajectory loss instead
+	# out_str += "trajectory_loss: %.4f, \n" % (mse)
+
+	# IPython.embed()
 
 	acc = (result['intent_labels'] == result['intent_preds']).sum() / len(result['intent_labels'])
 	out_str += "action_acc: %.4f, \n" % (acc)
@@ -135,9 +151,11 @@ def test(params, adaptor='none', adapt_step=1):
 	return result
 
 
-def main(dataset='vehicle_ngsim', model_type='rnn', adaptor='mekf',adapt_step=1):
+def main(dataset='vehicle_ngsim', model_type='rnn', adaptor='mekf',adapt_step=1, epoch=1):
 	save_dir = 'output/' + dataset + '/' + model_type + '/'
-	model_path = save_dir + 'model_1.pkl'
+	# TODO: default, load model_1 (product of first epoch), but should instead specify best epoch
+	# model_path = save_dir + 'model_1.pkl'
+	model_path = save_dir + 'model_%i.pkl' % (epoch)
 	params = hyper_parameters()
 	params._load_parameters(save_dir + 'log/')
 	params.params_dict['train_param']['init_model'] = model_path
@@ -146,5 +164,7 @@ def main(dataset='vehicle_ngsim', model_type='rnn', adaptor='mekf',adapt_step=1)
 
 
 if __name__ == '__main__':
-	main()
+	# main(adapt_step=50, model_type="fc", epoch=20)
+	# main(adapt_step=5)
+	main(adapt_step=50, model_type="fc", epoch=18)
 
