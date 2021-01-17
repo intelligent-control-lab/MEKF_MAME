@@ -2,16 +2,15 @@ from time import time
 import numpy as np
 import torch
 from .pred_utils import get_prediction_on_batch
-import IPython
+import IPython, copy
 
 # TODO: this selects how much data to use
 # data_size=100
-# test set size
-# 16*128 = 2048
-# data_size=800
+# test set size: 1986
 data_size=3000
+# data_size = 400
 def batch2iter_data(dataloader, device='cpu',data_size=data_size):
-	traj_hist, traj_labels, intent_labels, start_decodes, pred_start_pos, x_mask = None, None, None, None, None, None
+	traj_hist, traj_labels, intent_labels, start_decodes, pred_start_pos, x_mask, rollout_start_inds = None, None, None, None, None, None, [0]
 
 	for i, data in enumerate(dataloader, 0):
 		x, y_traj, y_intent, start_decode, start_pos, mask = data
@@ -30,10 +29,11 @@ def batch2iter_data(dataloader, device='cpu',data_size=data_size):
 			pred_start_pos = torch.cat([pred_start_pos, start_pos], dim=0)
 			x_mask = torch.cat([x_mask, mask], dim=0)
 
+		# rollout_start_inds.append(traj_hist.shape[0])
 		if data_size>0 and 	traj_hist.size(0)>data_size:
 			break
 
-	print(traj_hist.shape)
+	# print(traj_hist.shape)
 	traj_hist = traj_hist.float().to(device)
 	traj_labels = traj_labels.float().to(device)
 	intent_labels = intent_labels.float().to(device)
@@ -42,22 +42,21 @@ def batch2iter_data(dataloader, device='cpu',data_size=data_size):
 	x_mask = x_mask.byte().to(device)
 	data = [traj_hist, traj_labels, intent_labels, start_decodes, pred_start_pos, x_mask]
 
-	print("at the end of batch2iterdata")
+	# print("at the end of batch2iterdata")
 	# IPython.embed()
 	return data
 
 
 def online_adaptation(dataloader, model, optimizer, params, device,
-                          adapt_step=1, use_multi_epoch=False,multiepoch_thresh=(0, 0)):
+                          adapt_step=1, use_multi_epoch=False,multiepoch_thresh=(0, 0), reset_after_rollout=True):
 	optim_name = optimizer.__class__.__name__
 	if optim_name == 'Lookahead':
 		optim_name = optim_name + '_' + optimizer.optimizer.__class__.__name__
 	print('optimizer:', optim_name)
 	print('adapt_step:', adapt_step, ', use_multi_epoch:', use_multi_epoch,', multiepoch_thresh:', multiepoch_thresh),
-	t1 = time()
 
 	data = batch2iter_data(dataloader, device)
-	traj_hist, traj_labels, intent_labels, _, pred_start_pos, _ = data
+	traj_hist, traj_labels, intent_labels, start_decodes, pred_start_pos, x_mask = data
 	batches = []
 	for ii in range(len(pred_start_pos)):
 		temp_batch=[]
@@ -65,8 +64,33 @@ def online_adaptation(dataloader, model, optimizer, params, device,
 			temp_batch.append(item[[ii]])
 		batches.append(temp_batch)
 
-	traj_preds = torch.zeros_like(traj_labels)
-	intent_preds = torch.zeros(size=(len(intent_labels),params['class_num']),dtype=torch.float,device=intent_labels.device)
+	# IPython.embed()
+	windows_per_rollout = 400 - (params["output_time_step"] + params["input_time_step"]) + 1
+	if reset_after_rollout:
+		for i in range(6): # TODO: 10
+			rollout_batch = batches[i*windows_per_rollout: (i+1)*windows_per_rollout]
+			rollout_traj_preds, rollout_intent_preds = online_adaptation_single_rollout(model, rollout_batch, optimizer, optim_name, adapt_step, multiepoch_thresh, device)
+
+			if i == 0:
+				traj_preds = rollout_traj_preds
+				intent_preds = rollout_intent_preds
+			else:
+				traj_preds = torch.cat((traj_preds, rollout_traj_preds), axis=0)
+				intent_preds = torch.cat((intent_preds, rollout_intent_preds), axis=0)
+	else:
+		traj_preds, intent_preds = online_adaptation_single_rollout(model, batches, optimizer,
+																					optim_name, adapt_step,
+																					multiepoch_thresh, device)
+
+	return traj_hist, traj_preds, traj_labels, intent_preds, intent_labels, pred_start_pos
+
+
+def online_adaptation_single_rollout(model, batches, optimizer, optim_name, adapt_step, multiepoch_thresh, device):
+	"""
+	Returns a 3D Tensor
+	"""
+	traj_preds = []
+	intent_preds = []
 
 	temp_pred_list = []
 	temp_label_list = []
@@ -74,16 +98,16 @@ def online_adaptation(dataloader, model, optimizer, params, device,
 	cnt = [0, 0, 0]
 	cost_list = []
 	post_cost_list=[]
-
 	cost_diff_list = []
-	print("In online_adaptation, ln 69")
-	# IPython.embed()
-	for t in range(len(pred_start_pos)):
+
+	t1 = time()
+
+	for t in range(len(batches)):
 		batch_data = batches[t]
 		_, pred_traj, y_traj, pred_intent, _, _ = get_prediction_on_batch(batch_data, model, device)
-		# IPython.embed()
-		traj_preds[t] = pred_traj[0].detach()
-		intent_preds[t] = pred_intent[0].detach()
+
+		traj_preds.append(pred_traj[0].detach()[None])
+		intent_preds.append(pred_intent[0].detach()[None])
 
 		temp_pred_list += [pred_traj]
 		temp_label_list += [y_traj]
@@ -155,8 +179,10 @@ def online_adaptation(dataloader, model, optimizer, params, device,
 			print('finished pred {}, time:{},  partial cost before adapt:{}, partial cost after adapt:{}'.format(t, time() - t1, full_loss,post_loss))
 			t1 = time()
 
+	# IPython.embed()
 	print("avg cost improvement (should be +): %f +/- %f" % (np.mean(cost_diff_list), np.std(cost_diff_list)))
 	print('avg_cost:', np.mean(cost_list))
 	print('number of update epoch', cnt)
-	return traj_hist, traj_preds,traj_labels, intent_preds, intent_labels, pred_start_pos
-
+	traj_preds = torch.cat(traj_preds, axis=0)
+	intent_preds = torch.cat(intent_preds, axis=0)
+	return traj_preds, intent_preds

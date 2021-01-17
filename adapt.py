@@ -35,7 +35,7 @@ fc_layer_name = ['encoder.layers.0.weight', 'encoder.layers.0.bias',
                  'decoder.output_projection.weight', 'decoder.output_projection.bias', ]
 
 
-def adaptable_prediction(data_loader, model, train_params, device, adaptor, adapt_step=1):
+def adaptable_prediction(data_loader, model, train_params, device, adaptor, adapt_step=1, reset_after_rollout=True):
 	'''adaptation hyper param'''
 	adapt_params = adapt_hyper_parameters(adaptor=adaptor, adapt_step=adapt_step, log_dir=train_params['log_dir'])
 	adapt_params._save_parameters()
@@ -45,7 +45,7 @@ def adaptable_prediction(data_loader, model, train_params, device, adaptor, adap
 	if train_params['encoder'] == 'rnn':
 		adapt_layers = rnn_layer_name[8:]
 	else:
-		adapt_layers = fc_layer_name[8:]
+		adapt_layers = fc_layer_name[8:] # TODO
 	print('adapt_weights:')
 	print(adapt_layers)
 	for name, p in model.named_parameters():
@@ -53,6 +53,7 @@ def adaptable_prediction(data_loader, model, train_params, device, adaptor, adap
 			adapt_weights.append(p)
 			print(name, p.size())
 
+	# IPython.embed()
 	optim_param = adapt_params.adapt_param()
 	if adaptor == 'mekf' or adaptor=='mekf_ma':
 		optimizer = MEKF_MA(adapt_weights, dim_out=adapt_step * train_params['coordinate_dim'],
@@ -81,13 +82,13 @@ def adaptable_prediction(data_loader, model, train_params, device, adaptor, adap
 	pred_result = online_adaptation(data_loader, model, optimizer, train_params, device,
                                     adapt_step=adapt_step,
                                     use_multi_epoch=st_param['use_multi_epoch'],
-                                    multiepoch_thresh=st_param['multiepoch_thresh'])
+                                    multiepoch_thresh=st_param['multiepoch_thresh'], reset_after_rollout=reset_after_rollout)
 
 
 	return pred_result
 
 
-def test(params, adaptor='none', adapt_step=1):
+def test(params, adaptor='none', adapt_step=1, reset_after_rollout=True):
 	train_params = params.train_param()
 	train_params['data_mean'] = torch.tensor(train_params['data_stats']['speed_mean'], dtype=torch.float).unsqueeze(
 		0).to(device)
@@ -105,18 +106,11 @@ def test(params, adaptor='none', adapt_step=1):
 		with torch.no_grad():
 			pred_result = get_predictions(data_loader, model,  device)
 	else:
-		pred_result = adaptable_prediction(data_loader, model, train_params, device, adaptor, adapt_step)
-
-	traj_hist, traj_preds, traj_labels, intent_preds, intent_labels, pred_start_pos = pred_result
-
+		pred_result = adaptable_prediction(data_loader, model, train_params, device, adaptor, adapt_step, reset_after_rollout=reset_after_rollout)
 
 	# IPython.embed()
-	# TODO: what happened to the multiple rollouts in the test set? only just 1
-	# Note: traj_preds is 1 rollout's worth, w/ shape (len_rollout, ydim, 2)
-	# true_mse = torch.nn.MSELoss()(traj_preds * data_stats["data_std"] + data_stats["data_mean"],
-	# 						   traj_labels * data_stats["data_std"] + data_stats["data_mean"])
-	# true_mse = true_mse.cpu().detach().numpy()
 
+	traj_hist, traj_preds, traj_labels, intent_preds, intent_labels, pred_start_pos = pred_result
 	traj_preds = get_position(traj_preds, pred_start_pos, data_stats) # NOTE: converted these to position first!
 	traj_labels = get_position(traj_labels, pred_start_pos, data_stats) # NOTE!!
 	intent_preds_prob = intent_preds.detach().clone()
@@ -131,27 +125,41 @@ def test(params, adaptor='none', adapt_step=1):
 
 	out_str = 'Evaluation Result: \n'
 
-	# out_str += "trajectory_mse: %.5f, \n" % (true_mse)
-
 	num, time_step = result['traj_labels'].shape[:2]
 	mse = np.power(result['traj_labels'] - result['traj_preds'], 2).sum() / (num * time_step)
 	out_str += "trajectory_mse: %.4f, \n" % (mse)
-	# TODO: calling this trajectory loss instead
-	# out_str += "trajectory_loss: %.4f, \n" % (mse)
 
-	# IPython.embed()
+	windows_per_rollout = 400 - (train_params["output_time_step"] + train_params["input_time_step"]) + 1
+	if reset_after_rollout:
+		# IPython.embed()
+		mse_list = []
+		for i in range(6): # TODO: set to 10
+			mse = np.power(result['traj_labels'][i*windows_per_rollout: (i+1)*windows_per_rollout] - result['traj_preds'][i*windows_per_rollout: (i+1)*windows_per_rollout], 2).sum() / (windows_per_rollout * time_step)
+			mse_list.append(mse)
+
+		result["mse_list"] = mse_list
+		result["mse_mean"] = np.mean(mse_list)
+		result["mse_std"] = np.std(mse_list)
+		print("******************************************************")
+		print("Per rollout stats")
+		print(mse_list)
+		print(result["mse_mean"])
+		print(result["mse_std"])
+		print("******************************************************")
+
 
 	acc = (result['intent_labels'] == result['intent_preds']).sum() / len(result['intent_labels'])
 	out_str += "action_acc: %.4f, \n" % (acc)
 
 	print(out_str)
+	# TODO: modified save path to be more specific
 	save_path = train_params['log_dir'] + adaptor + str(adapt_step) + '_pred.pkl'
 	joblib.dump(result, save_path)
 	print('save result to', save_path)
 	return result
 
 
-def main(dataset='vehicle_ngsim', model_type='rnn', adaptor='mekf',adapt_step=1, epoch=1):
+def main(dataset='vehicle_ngsim', model_type='rnn', adaptor='mekf',adapt_step=1, epoch=1, reset_after_rollout=True):
 	save_dir = 'output/' + dataset + '/' + model_type + '/'
 	# TODO: default, load model_1 (product of first epoch), but should instead specify best epoch
 	# model_path = save_dir + 'model_1.pkl'
@@ -160,11 +168,11 @@ def main(dataset='vehicle_ngsim', model_type='rnn', adaptor='mekf',adapt_step=1,
 	params._load_parameters(save_dir + 'log/')
 	params.params_dict['train_param']['init_model'] = model_path
 	params.print_params()
-	test(params, adaptor=adaptor, adapt_step=adapt_step)
+	test(params, adaptor=adaptor, adapt_step=adapt_step, reset_after_rollout=reset_after_rollout)
 
 
 if __name__ == '__main__':
 	# main(adapt_step=50, model_type="fc", epoch=20)
 	# main(adapt_step=5)
-	main(adapt_step=50, model_type="fc", epoch=18)
+	main(adapt_step=50, model_type="fc", epoch=18, reset_after_rollout=True)
 
